@@ -10,25 +10,27 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::type_complexity)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::large_enum_variant)]
 
 use anyhow::Context as _;
+use clap::{CommandFactory as _, Parser as _};
 use std::io::Write as _;
-use structopt::StructOpt as _;
 
 mod actions;
 mod commands;
 mod sock;
 
-#[derive(Debug, structopt::StructOpt)]
-#[structopt(about = "Unofficial Bitwarden CLI")]
+#[derive(Debug, clap::Parser)]
+#[command(version, about = "Unofficial Bitwarden CLI")]
 enum Opt {
-    #[structopt(about = "Get or set configuration options")]
+    #[command(about = "Get or set configuration options")]
     Config {
-        #[structopt(subcommand)]
+        #[command(subcommand)]
         config: Config,
     },
 
-    #[structopt(
+    #[command(
         about = "Register this device with the Bitwarden server",
         long_about = "Register this device with the Bitwarden server\n\n\
             The official Bitwarden server includes bot detection to prevent \
@@ -39,62 +41,61 @@ enum Opt {
     )]
     Register,
 
-    #[structopt(about = "Log in to the Bitwarden server")]
+    #[command(about = "Log in to the Bitwarden server")]
     Login,
 
-    #[structopt(about = "Unlock the local Bitwarden database")]
+    #[command(about = "Unlock the local Bitwarden database")]
     Unlock,
 
-    #[structopt(about = "Check if the local Bitwarden database is unlocked")]
+    #[command(about = "Check if the local Bitwarden database is unlocked")]
     Unlocked,
 
-    #[structopt(about = "Update the local copy of the Bitwarden database")]
+    #[command(about = "Update the local copy of the Bitwarden database")]
     Sync,
 
-    #[structopt(
+    #[command(
         about = "List all entries in the local Bitwarden database",
         visible_alias = "ls"
     )]
     List {
-        #[structopt(
+        #[arg(
             long,
             help = "Fields to display. \
                 Available options are id, name, user, folder. \
                 Multiple fields will be separated by tabs.",
             default_value = "name",
-            use_delimiter = true
+            use_value_delimiter = true
         )]
         fields: Vec<String>,
     },
 
-    #[structopt(about = "Display the password for a given entry")]
+    #[command(about = "Display the password for a given entry")]
     Get {
-        #[structopt(help = "Name or UUID of the entry to display")]
+        #[arg(help = "Name or UUID of the entry to display")]
         name: String,
-        #[structopt(help = "Username of the entry to display")]
+        #[arg(help = "Username of the entry to display")]
         user: Option<String>,
-        #[structopt(long, help = "Folder name to search in")]
+        #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
-        #[structopt(short, long, help = "Field to get")]
+        #[arg(short, long, help = "Field to get")]
         field: Option<String>,
-        #[structopt(
-            long,
-            help = "Display the notes in addition to the password"
-        )]
+        #[arg(long, help = "Display the notes in addition to the password")]
         full: bool,
+        #[structopt(long, help = "Display output as JSON")]
+        raw: bool,
     },
 
-    #[structopt(about = "Display the authenticator code for a given entry")]
+    #[command(about = "Display the authenticator code for a given entry")]
     Code {
-        #[structopt(help = "Name or UUID of the entry to display")]
+        #[arg(help = "Name or UUID of the entry to display")]
         name: String,
-        #[structopt(help = "Username of the entry to display")]
+        #[arg(help = "Username of the entry to display")]
         user: Option<String>,
-        #[structopt(long, help = "Folder name to search in")]
+        #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
     },
 
-    #[structopt(
+    #[command(
         about = "Add a new password to the database",
         long_about = "Add a new password to the database\n\n\
             This command will open a text editor to enter \
@@ -104,28 +105,27 @@ enum Opt {
             remainder will be saved as a note."
     )]
     Add {
-        #[structopt(help = "Name of the password entry")]
+        #[arg(help = "Name of the password entry")]
         name: String,
-        #[structopt(help = "Username for the password entry")]
+        #[arg(help = "Username for the password entry")]
         user: Option<String>,
-        #[structopt(
+        #[arg(
             long,
             help = "URI for the password entry",
-            multiple = true,
             number_of_values = 1
         )]
         uri: Vec<String>,
-        #[structopt(long, help = "Folder for the password entry")]
+        #[arg(long, help = "Folder for the password entry")]
         folder: Option<String>,
     },
 
-    #[structopt(
+    #[command(
         about = "Generate a new password",
         long_about = "Generate a new password\n\n\
             If given a password entry name, also save the generated \
             password to the database.",
         visible_alias = "gen",
-        group = structopt::clap::ArgGroup::with_name("password-type").args(&[
+        group = clap::ArgGroup::new("password-type").args(&[
             "no-symbols",
             "only-numbers",
             "nonconfusables",
@@ -133,39 +133,38 @@ enum Opt {
         ])
     )]
     Generate {
-        #[structopt(help = "Length of the password to generate")]
+        #[arg(help = "Length of the password to generate")]
         len: usize,
-        #[structopt(help = "Name of the password entry")]
+        #[arg(help = "Name of the password entry")]
         name: Option<String>,
-        #[structopt(help = "Username for the password entry")]
+        #[arg(help = "Username for the password entry")]
         user: Option<String>,
-        #[structopt(
+        #[arg(
             long,
             help = "URI for the password entry",
-            multiple = true,
             number_of_values = 1
         )]
         uri: Vec<String>,
-        #[structopt(long, help = "Folder for the password entry")]
+        #[arg(long, help = "Folder for the password entry")]
         folder: Option<String>,
-        #[structopt(
+        #[arg(
             long = "no-symbols",
             help = "Generate a password with no special characters"
         )]
         no_symbols: bool,
-        #[structopt(
+        #[arg(
             long = "only-numbers",
             help = "Generate a password consisting of only numbers"
         )]
         only_numbers: bool,
-        #[structopt(
+        #[arg(
             long,
             help = "Generate a password without visually similar \
                 characters (useful for passwords intended to be \
                 written down)"
         )]
         nonconfusables: bool,
-        #[structopt(
+        #[arg(
             long,
             help = "Generate a password of multiple dictionary \
                 words chosen from the EFF word list. The len \
@@ -175,7 +174,7 @@ enum Opt {
         diceware: bool,
     },
 
-    #[structopt(
+    #[command(
         about = "Modify an existing password",
         long_about = "Modify an existing password\n\n\
             This command will open a text editor with the existing \
@@ -186,50 +185,48 @@ enum Opt {
             as a note."
     )]
     Edit {
-        #[structopt(help = "Name or UUID of the password entry")]
+        #[arg(help = "Name or UUID of the password entry")]
         name: String,
-        #[structopt(help = "Username for the password entry")]
+        #[arg(help = "Username for the password entry")]
         user: Option<String>,
-        #[structopt(long, help = "Folder name to search in")]
+        #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
     },
 
-    #[structopt(about = "Remove a given entry", visible_alias = "rm")]
+    #[command(about = "Remove a given entry", visible_alias = "rm")]
     Remove {
-        #[structopt(help = "Name or UUID of the password entry")]
+        #[arg(help = "Name or UUID of the password entry")]
         name: String,
-        #[structopt(help = "Username for the password entry")]
+        #[arg(help = "Username for the password entry")]
         user: Option<String>,
-        #[structopt(long, help = "Folder name to search in")]
+        #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
     },
 
-    #[structopt(about = "View the password history for a given entry")]
+    #[command(about = "View the password history for a given entry")]
     History {
-        #[structopt(help = "Name or UUID of the password entry")]
+        #[arg(help = "Name or UUID of the password entry")]
         name: String,
-        #[structopt(help = "Username for the password entry")]
+        #[arg(help = "Username for the password entry")]
         user: Option<String>,
-        #[structopt(long, help = "Folder name to search in")]
+        #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
     },
 
-    #[structopt(about = "Lock the password database")]
+    #[command(about = "Lock the password database")]
     Lock,
 
-    #[structopt(about = "Remove the local copy of the password database")]
+    #[command(about = "Remove the local copy of the password database")]
     Purge,
 
-    #[structopt(
-        name = "stop-agent",
-        about = "Terminate the background agent"
-    )]
+    #[command(name = "stop-agent", about = "Terminate the background agent")]
     StopAgent,
-    #[structopt(
+
+    #[command(
         name = "gen-completions",
         about = "Generate completion script for the given shell"
     )]
-    GenCompletions { shell: String },
+    GenCompletions { shell: clap_complete::Shell },
 }
 
 impl Opt {
@@ -259,20 +256,20 @@ impl Opt {
     }
 }
 
-#[derive(Debug, structopt::StructOpt)]
+#[derive(Debug, clap::Parser)]
 enum Config {
-    #[structopt(about = "Show the values of all configuration settings")]
+    #[command(about = "Show the values of all configuration settings")]
     Show,
-    #[structopt(about = "Set a configuration option")]
+    #[command(about = "Set a configuration option")]
     Set {
-        #[structopt(help = "Configuration key to set")]
+        #[arg(help = "Configuration key to set")]
         key: String,
-        #[structopt(help = "Value to set the configuration option to")]
+        #[arg(help = "Value to set the configuration option to")]
         value: String,
     },
-    #[structopt(about = "Reset a configuration option to its default")]
+    #[command(about = "Reset a configuration option to its default")]
     Unset {
-        #[structopt(help = "Configuration key to unset")]
+        #[arg(help = "Configuration key to unset")]
         key: String,
     },
 }
@@ -288,15 +285,18 @@ impl Config {
     }
 }
 
-#[paw::main]
-fn main(opt: Opt) {
+fn main() {
+    let opt = Opt::parse();
+
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info"),
     )
     .format(|buf, record| {
-        if let Some((w, _)) = term_size::dimensions() {
+        if let Some((terminal_size::Width(w), _)) =
+            terminal_size::terminal_size()
+        {
             let out = format!("{}: {}", record.level(), record.args());
-            writeln!(buf, "{}", textwrap::fill(&out, w - 1))
+            writeln!(buf, "{}", textwrap::fill(&out, usize::from(w) - 1))
         } else {
             writeln!(buf, "{}: {}", record.level(), record.args())
         }
@@ -321,12 +321,14 @@ fn main(opt: Opt) {
             folder,
             field,
             full,
+            raw,
         } => commands::get(
             name,
             user.as_deref(),
             folder.as_deref(),
             field.as_deref(),
             *full,
+            *raw,
         ),
         Opt::Code { name, user, folder } => {
             commands::code(name, user.as_deref(), folder.as_deref())
@@ -393,25 +395,20 @@ fn main(opt: Opt) {
         Opt::Lock => commands::lock(),
         Opt::Purge => commands::purge(),
         Opt::StopAgent => commands::stop_agent(),
-        Opt::GenCompletions { shell } => gen_completions(shell),
+        Opt::GenCompletions { shell } => {
+            clap_complete::generate(
+                *shell,
+                &mut Opt::command(),
+                "rbw",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
     }
     .context(format!("rbw {}", opt.subcommand_name()));
 
     if let Err(e) = res {
-        eprintln!("{:#}", e);
+        eprintln!("{e:#}");
         std::process::exit(1);
     }
-}
-
-fn gen_completions(shell: &str) -> anyhow::Result<()> {
-    let shell = match shell {
-        "bash" => structopt::clap::Shell::Bash,
-        "zsh" => structopt::clap::Shell::Zsh,
-        "fish" => structopt::clap::Shell::Fish,
-        "powershell" => structopt::clap::Shell::PowerShell,
-        "elvish" => structopt::clap::Shell::Elvish,
-        _ => return Err(anyhow::anyhow!("unknown shell {}", shell)),
-    };
-    Opt::clap().gen_completions_to("rbw", shell, &mut std::io::stdout());
-    Ok(())
 }

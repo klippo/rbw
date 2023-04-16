@@ -4,14 +4,10 @@ pub enum Error {
     ConfigMissingEmail,
 
     #[error("failed to create block mode decryptor")]
-    CreateBlockMode {
-        source: block_modes::InvalidKeyIvLength,
-    },
+    CreateBlockMode { source: aes::cipher::InvalidLength },
 
     #[error("failed to create block mode decryptor")]
-    CreateHmac {
-        source: hmac::crypto_mac::InvalidKeyLength,
-    },
+    CreateHmac { source: aes::cipher::InvalidLength },
 
     #[error("failed to create directory at {}", .file.display())]
     CreateDirectory {
@@ -20,7 +16,7 @@ pub enum Error {
     },
 
     #[error("failed to decrypt")]
-    Decrypt { source: block_modes::BlockModeError },
+    Decrypt { source: block_padding::UnpadError },
 
     #[error("failed to parse pinentry output ({out:?})")]
     FailedToParsePinentry { out: String },
@@ -122,6 +118,18 @@ pub enum Error {
         file: std::path::PathBuf,
     },
 
+    #[error("failed to load client cert from {}", .file.display())]
+    LoadClientCert {
+        source: tokio::io::Error,
+        file: std::path::PathBuf,
+    },
+
+    #[error("failed to load client cert from {}", .file.display())]
+    LoadClientCertReqwest {
+        source: reqwest::Error,
+        file: std::path::PathBuf,
+    },
+
     #[error("invalid padding")]
     Padding,
 
@@ -130,6 +138,12 @@ pub enum Error {
 
     #[error("pbkdf2 requires at least 1 iteration (got 0)")]
     Pbkdf2ZeroIterations,
+
+    #[error("failed to run pbkdf2")]
+    Pbkdf2,
+
+    #[error("failed to run argon2")]
+    Argon2,
 
     #[error("pinentry cancelled")]
     PinentryCancelled,
@@ -213,6 +227,9 @@ pub enum Error {
 
     #[error("error writing to pinentry stdin")]
     WriteStdin { source: tokio::io::Error },
+
+    #[error("invalid kdf type: {ty}")]
+    InvalidKdfType { ty: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

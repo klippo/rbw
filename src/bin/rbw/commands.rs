@@ -1,4 +1,7 @@
 use anyhow::Context as _;
+use serde::Serialize;
+use std::io;
+use std::io::prelude::Write;
 
 const MISSING_CONFIG_HELP: &str =
     "Before using rbw, you must configure the email address you would like to \
@@ -10,7 +13,7 @@ const MISSING_CONFIG_HELP: &str =
     and, if your server has a non-default identity url:\n\n    \
         rbw config set identity_url <url>\n";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
 struct DecryptedCipher {
     id: String,
@@ -28,11 +31,11 @@ impl DecryptedCipher {
             DecryptedData::Login { password, .. } => {
                 password.as_ref().map_or_else(
                     || {
-                        eprintln!("entry for '{}' had no password", desc);
+                        eprintln!("entry for '{desc}' had no password");
                         false
                     },
                     |password| {
-                        println!("{}", password);
+                        println!("{password}");
                         true
                     },
                 )
@@ -40,11 +43,11 @@ impl DecryptedCipher {
             DecryptedData::Card { number, .. } => {
                 number.as_ref().map_or_else(
                     || {
-                        eprintln!("entry for '{}' had no card number", desc);
+                        eprintln!("entry for '{desc}' had no card number");
                         false
                     },
                     |number| {
-                        println!("{}", number);
+                        println!("{number}");
                         true
                     },
                 )
@@ -60,11 +63,11 @@ impl DecryptedCipher {
                     [title, first_name, middle_name, last_name]
                         .iter()
                         .copied()
-                        .cloned()
                         .flatten()
+                        .cloned()
                         .collect();
                 if names.is_empty() {
-                    eprintln!("entry for '{}' had no name", desc);
+                    eprintln!("entry for '{desc}' had no name");
                     false
                 } else {
                     println!("{}", names.join(" "));
@@ -73,11 +76,11 @@ impl DecryptedCipher {
             }
             DecryptedData::SecureNote {} => self.notes.as_ref().map_or_else(
                 || {
-                    eprintln!("entry for '{}' had no notes", desc);
+                    eprintln!("entry for '{desc}' had no notes");
                     false
                 },
                 |notes| {
-                    println!("{}", notes);
+                    println!("{notes}");
                     true
                 },
             ),
@@ -97,7 +100,7 @@ impl DecryptedCipher {
             } => match field {
                 "notes" => {
                     if let Some(notes) = &self.notes {
-                        println!("{}", notes);
+                        println!("{notes}");
                     }
                 }
                 "username" | "user" => {
@@ -105,8 +108,8 @@ impl DecryptedCipher {
                 }
                 "totp" | "code" => {
                     if let Some(totp) = totp {
-                        if let Ok(code) = generate_totp(&totp) {
-                            println!("{}", code);
+                        if let Ok(code) = generate_totp(totp) {
+                            println!("{code}");
                         }
                     }
                 }
@@ -118,7 +121,7 @@ impl DecryptedCipher {
                     }
                 }
                 "password" => {
-                    self.display_short(&desc);
+                    self.display_short(desc);
                 }
                 _ => {
                     for f in &self.fields {
@@ -146,13 +149,13 @@ impl DecryptedCipher {
                 ..
             } => match field {
                 "number" | "card" => {
-                    self.display_short(&desc);
+                    self.display_short(desc);
                 }
                 "exp" => {
                     if let (Some(month), Some(year)) = (exp_month, exp_year) {
                         display_field(
                             "Exp",
-                            Some(format!("{}/{}", month, year).as_str()),
+                            Some(format!("{month}/{year}").as_str()),
                         );
                     }
                 }
@@ -173,7 +176,7 @@ impl DecryptedCipher {
                 }
                 "notes" => {
                     if let Some(notes) = &self.notes {
-                        println!("{}", notes);
+                        println!("{notes}");
                     }
                 }
                 _ => {
@@ -210,7 +213,7 @@ impl DecryptedCipher {
                 ..
             } => match field {
                 "name" => {
-                    self.display_short(&desc);
+                    self.display_short(desc);
                 }
                 "email" => {
                     display_field("Email", email.as_deref());
@@ -249,7 +252,7 @@ impl DecryptedCipher {
                 }
                 "notes" => {
                     if let Some(notes) = &self.notes {
-                        println!("{}", notes);
+                        println!("{notes}");
                     }
                 }
                 _ => {
@@ -309,7 +312,7 @@ impl DecryptedCipher {
                     for uri in uris {
                         displayed |= display_field("URI", Some(&uri.uri));
                         let match_type =
-                            uri.match_type.map(|ty| format!("{}", ty));
+                            uri.match_type.map(|ty| format!("{ty}"));
                         displayed |= display_field(
                             "Match type",
                             match_type.as_deref(),
@@ -328,7 +331,7 @@ impl DecryptedCipher {
                     if displayed {
                         println!();
                     }
-                    println!("{}", notes);
+                    println!("{notes}");
                 }
             }
             DecryptedData::Card {
@@ -344,7 +347,7 @@ impl DecryptedCipher {
                 if let (Some(exp_month), Some(exp_year)) =
                     (exp_month, exp_year)
                 {
-                    println!("Expiration: {}/{}", exp_month, exp_year);
+                    println!("Expiration: {exp_month}/{exp_year}");
                     displayed = true;
                 }
                 displayed |= display_field("CVV", code.as_deref());
@@ -356,7 +359,7 @@ impl DecryptedCipher {
                     if displayed {
                         println!();
                     }
-                    println!("{}", notes);
+                    println!("{notes}");
                 }
             }
             DecryptedData::Identity {
@@ -398,7 +401,7 @@ impl DecryptedCipher {
                     if displayed {
                         println!();
                     }
-                    println!("{}", notes);
+                    println!("{notes}");
                 }
             }
             DecryptedData::SecureNote {} => {
@@ -417,6 +420,14 @@ impl DecryptedCipher {
             }
             _ => self.name.clone(),
         }
+    }
+
+    fn display_json(&self, desc: &str) -> anyhow::Result<()> {
+        serde_json::to_writer_pretty(std::io::stdout(), &self)
+            .context(format!("failed to write entry '{desc}' to stdout"))?;
+        println!();
+
+        Ok(())
     }
 
     fn exact_match(
@@ -510,9 +521,9 @@ impl DecryptedCipher {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-#[allow(clippy::large_enum_variant)]
 enum DecryptedData {
     Login {
         username: Option<String>,
@@ -550,21 +561,21 @@ enum DecryptedData {
     SecureNote,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
 struct DecryptedField {
     name: Option<String>,
     value: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
 struct DecryptedHistoryEntry {
     last_used_date: String,
     password: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
 struct DecryptedUri {
     uri: String,
@@ -614,6 +625,10 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
         "email" => config.email = Some(value.to_string()),
         "base_url" => config.base_url = Some(value.to_string()),
         "identity_url" => config.identity_url = Some(value.to_string()),
+        "client_cert_path" => {
+            config.client_cert_path =
+                Some(std::path::PathBuf::from(value.to_string()));
+        }
         "lock_timeout" => {
             let timeout = value
                 .parse()
@@ -623,6 +638,12 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
             } else {
                 config.lock_timeout = timeout;
             }
+        }
+        "sync_interval" => {
+            let interval = value
+                .parse()
+                .context("failed to parse value for sync_interval")?;
+            config.sync_interval = interval;
         }
         "pinentry" => config.pinentry = value.to_string(),
         _ => return Err(anyhow::anyhow!("invalid config key: {}", key)),
@@ -646,6 +667,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "email" => config.email = None,
         "base_url" => config.base_url = None,
         "identity_url" => config.identity_url = None,
+        "client_cert_path" => config.client_cert_path = None,
         "lock_timeout" => {
             config.lock_timeout = rbw::config::default_lock_timeout();
         }
@@ -727,19 +749,25 @@ pub fn list(fields: &[String]) -> anyhow::Result<()> {
                 ListField::User => match &cipher.data {
                     DecryptedData::Login { username, .. } => {
                         username.as_ref().map_or_else(
-                            || "".to_string(),
+                            String::new,
                             std::string::ToString::to_string,
                         )
                     }
-                    _ => "".to_string(),
+                    _ => String::new(),
                 },
                 ListField::Folder => cipher.folder.as_ref().map_or_else(
-                    || "".to_string(),
+                    String::new,
                     std::string::ToString::to_string,
                 ),
             })
             .collect();
-        println!("{}", values.join("\t"));
+
+        // write to stdout but don't panic when pipe get's closed
+        // this happens when piping stdout in a shell
+        match writeln!(&mut io::stdout(), "{}", values.join("\t")) {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+            res => res,
+        }?;
     }
 
     Ok(())
@@ -751,6 +779,7 @@ pub fn get(
     folder: Option<&str>,
     field: Option<&str>,
     full: bool,
+    raw: bool,
 ) -> anyhow::Result<()> {
     unlock()?;
 
@@ -758,16 +787,18 @@ pub fn get(
 
     let desc = format!(
         "{}{}",
-        user.map_or_else(|| "".to_string(), |s| format!("{}@", s)),
+        user.map_or_else(String::new, |s| format!("{s}@")),
         name
     );
 
     let (_, decrypted) = find_entry(&db, name, user, folder)
-        .with_context(|| format!("couldn't find entry for '{}'", desc))?;
-    if full {
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    if raw {
+        decrypted.display_json(&desc)?;
+    } else if full {
         decrypted.display_long(&desc);
-    } else if field != None {
-        decrypted.display_field(&desc, field.unwrap());
+    } else if let Some(field) = field {
+        decrypted.display_field(&desc, field);
     } else {
         decrypted.display_short(&desc);
     }
@@ -786,12 +817,12 @@ pub fn code(
 
     let desc = format!(
         "{}{}",
-        user.map_or_else(|| "".to_string(), |s| format!("{}@", s)),
+        user.map_or_else(String::new, |s| format!("{s}@")),
         name
     );
 
     let (_, decrypted) = find_entry(&db, name, user, folder)
-        .with_context(|| format!("couldn't find entry for '{}'", desc))?;
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let DecryptedData::Login { totp, .. } = decrypted.data {
         if let Some(totp) = totp {
@@ -914,7 +945,7 @@ pub fn generate(
     ty: rbw::pwgen::Type,
 ) -> anyhow::Result<()> {
     let password = rbw::pwgen::pwgen(ty, len);
-    println!("{}", password);
+    println!("{password}");
 
     if let Some(name) = name {
         unlock()?;
@@ -1014,19 +1045,19 @@ pub fn edit(
 
     let desc = format!(
         "{}{}",
-        username.map_or_else(|| "".to_string(), |s| format!("{}@", s)),
+        username.map_or_else(String::new, |s| format!("{s}@")),
         name
     );
 
     let (entry, decrypted) = find_entry(&db, name, username, folder)
-        .with_context(|| format!("couldn't find entry for '{}'", desc))?;
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let (data, notes, history) = match &decrypted.data {
         DecryptedData::Login { password, .. } => {
             let mut contents =
                 format!("{}\n", password.as_deref().unwrap_or(""));
             if let Some(notes) = decrypted.notes {
-                contents.push_str(&format!("\n{}\n", notes));
+                contents.push_str(&format!("\n{notes}\n"));
             }
 
             let contents = rbw::edit::edit(&contents, HELP)?;
@@ -1046,16 +1077,15 @@ pub fn edit(
                 })
                 .transpose()?;
             let mut history = entry.history.clone();
-            let (entry_username, entry_password, entry_uris, entry_totp) =
-                match &entry.data {
-                    rbw::db::EntryData::Login {
-                        username,
-                        password,
-                        uris,
-                        totp,
-                    } => (username, password, uris, totp),
-                    _ => unreachable!(),
-                };
+            let rbw::db::EntryData::Login {
+                username: entry_username,
+                password: entry_password,
+                uris: entry_uris,
+                totp: entry_totp,
+            } = &entry.data
+            else {
+                unreachable!();
+            };
 
             if let Some(prev_password) = entry_password.clone() {
                 let new_history_entry = rbw::db::HistoryEntry {
@@ -1117,12 +1147,12 @@ pub fn remove(
 
     let desc = format!(
         "{}{}",
-        username.map_or_else(|| "".to_string(), |s| format!("{}@", s)),
+        username.map_or_else(String::new, |s| format!("{s}@")),
         name
     );
 
     let (entry, _) = find_entry(&db, name, username, folder)
-        .with_context(|| format!("couldn't find entry for '{}'", desc))?;
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let (Some(access_token), ()) =
         rbw::actions::remove(access_token, refresh_token, &entry.id)?
@@ -1147,12 +1177,12 @@ pub fn history(
 
     let desc = format!(
         "{}{}",
-        username.map_or_else(|| "".to_string(), |s| format!("{}@", s)),
+        username.map_or_else(String::new, |s| format!("{s}@")),
         name
     );
 
     let (_, decrypted) = find_entry(&db, name, username, folder)
-        .with_context(|| format!("couldn't find entry for '{}'", desc))?;
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     for history in decrypted.history {
         println!("{}: {}", history.last_used_date, history.password);
     }
@@ -1240,8 +1270,6 @@ fn check_config() -> anyhow::Result<()> {
 
 fn version_or_quit() -> anyhow::Result<u32> {
     crate::actions::version().map_err(|e| {
-        // https://github.com/rust-lang/rust-clippy/issues/8003
-        #[allow(clippy::let_underscore_drop)]
         let _ = crate::actions::quit();
         e
     })
@@ -1629,7 +1657,7 @@ fn parse_editor(contents: &str) -> (Option<String>, Option<String>) {
     let mut notes: String = lines
         .skip_while(|line| line.is_empty())
         .filter(|line| !line.starts_with('#'))
-        .map(|line| format!("{}\n", line))
+        .map(|line| format!("{line}\n"))
         .collect();
     while notes.ends_with('\n') {
         notes.pop();
@@ -1697,7 +1725,7 @@ fn parse_totp_secret(secret: &str) -> anyhow::Result<Vec<u8>> {
     };
     base32::decode(
         base32::Alphabet::RFC4648 { padding: false },
-        &secret_str.replace(" ", ""),
+        &secret_str.replace(' ', ""),
     )
     .ok_or_else(|| anyhow::anyhow!("totp secret was not valid base32"))
 }
@@ -1809,7 +1837,7 @@ mod test {
     ) -> bool {
         let res = find_entry_raw(entries, name, username, folder);
         if let Err(e) = res {
-            format!("{}", e).contains("no entry found")
+            format!("{e}").contains("no entry found")
         } else {
             false
         }
@@ -1823,7 +1851,7 @@ mod test {
     ) -> bool {
         let res = find_entry_raw(entries, name, username, folder);
         if let Err(e) = res {
-            format!("{}", e).contains("multiple entries found")
+            format!("{e}").contains("multiple entries found")
         } else {
             false
         }
@@ -1882,7 +1910,7 @@ fn display_field(name: &str, field: Option<&str>) -> bool {
     field.map_or_else(
         || false,
         |field| {
-            println!("{}: {}", name, field);
+            println!("{name}: {field}");
             true
         },
     )

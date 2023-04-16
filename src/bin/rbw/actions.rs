@@ -31,11 +31,11 @@ pub fn quit() -> anyhow::Result<()> {
             let pidfile = rbw::dirs::pid_file();
             let mut pid = String::new();
             std::fs::File::open(pidfile)?.read_to_string(&mut pid)?;
-            let pid = nix::unistd::Pid::from_raw(pid.parse()?);
+            let pid = nix::unistd::Pid::from_raw(pid.trim_end().parse()?);
             sock.send(&rbw::protocol::Request {
-                tty: nix::unistd::ttyname(0)
-                    .ok()
-                    .and_then(|p| p.to_str().map(std::string::ToString::to_string)),
+                tty: nix::unistd::ttyname(0).ok().and_then(|p| {
+                    p.to_str().map(std::string::ToString::to_string)
+                }),
                 action: rbw::protocol::Action::Quit,
             })?;
             wait_for_exit(pid);

@@ -10,6 +10,8 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::type_complexity)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::large_enum_variant)]
 
 use anyhow::Context as _;
 
@@ -18,6 +20,7 @@ mod agent;
 mod daemon;
 mod debugger;
 mod sock;
+mod timeout;
 
 async fn tokio_main(
     startup_ack: Option<crate::daemon::StartupAck>,
@@ -28,7 +31,7 @@ async fn tokio_main(
         startup_ack.ack()?;
     }
 
-    let mut agent = crate::agent::Agent::new()?;
+    let agent = crate::agent::Agent::new()?;
     agent.run(listener).await?;
 
     Ok(())
@@ -78,7 +81,7 @@ fn main() {
 
     if let Err(e) = res {
         // XXX log file?
-        eprintln!("{:#}", e);
+        eprintln!("{e:#}");
         std::process::exit(1);
     }
 }

@@ -4,9 +4,7 @@ pub async fn register(
     email: &str,
     apikey: crate::locked::ApiKey,
 ) -> Result<()> {
-    let config = crate::config::Config::load_async().await?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, config) = api_client_async().await?;
 
     client
         .register(email, &crate::config::device_id(&config).await?, &apikey)
@@ -20,14 +18,27 @@ pub async fn login(
     password: crate::locked::Password,
     two_factor_token: Option<&str>,
     two_factor_provider: Option<crate::api::TwoFactorProviderType>,
-) -> Result<(String, String, u32, String)> {
-    let config = crate::config::Config::load_async().await?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+) -> Result<(
+    String,
+    String,
+    crate::api::KdfType,
+    u32,
+    Option<u32>,
+    Option<u32>,
+    String,
+)> {
+    let (client, config) = api_client_async().await?;
+    let (kdf, iterations, memory, parallelism) =
+        client.prelogin(email).await?;
 
-    let iterations = client.prelogin(email).await?;
-    let identity =
-        crate::identity::Identity::new(email, &password, iterations)?;
+    let identity = crate::identity::Identity::new(
+        email,
+        &password,
+        kdf,
+        iterations,
+        memory,
+        parallelism,
+    )?;
     let (access_token, refresh_token, protected_key) = client
         .login(
             email,
@@ -38,13 +49,24 @@ pub async fn login(
         )
         .await?;
 
-    Ok((access_token, refresh_token, iterations, protected_key))
+    Ok((
+        access_token,
+        refresh_token,
+        kdf,
+        iterations,
+        memory,
+        parallelism,
+        protected_key,
+    ))
 }
 
 pub fn unlock<S: std::hash::BuildHasher>(
     email: &str,
     password: &crate::locked::Password,
+    kdf: crate::api::KdfType,
     iterations: u32,
+    memory: Option<u32>,
+    parallelism: Option<u32>,
     protected_key: &str,
     protected_private_key: &str,
     protected_org_keys: &std::collections::HashMap<String, String, S>,
@@ -52,8 +74,14 @@ pub fn unlock<S: std::hash::BuildHasher>(
     crate::locked::Keys,
     std::collections::HashMap<String, crate::locked::Keys>,
 )> {
-    let identity =
-        crate::identity::Identity::new(email, password, iterations)?;
+    let identity = crate::identity::Identity::new(
+        email,
+        password,
+        kdf,
+        iterations,
+        memory,
+        parallelism,
+    )?;
 
     let protected_key =
         crate::cipherstring::CipherString::new(protected_key)?;
@@ -121,9 +149,7 @@ async fn sync_once(
     std::collections::HashMap<String, String>,
     Vec<crate::db::Entry>,
 )> {
-    let config = crate::config::Config::load_async().await?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client_async().await?;
     client.sync(access_token).await
 }
 
@@ -147,9 +173,7 @@ fn add_once(
     notes: Option<&str>,
     folder_id: Option<&str>,
 ) -> Result<()> {
-    let config = crate::config::Config::load()?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.add(access_token, name, data, notes, folder_id)?;
     Ok(())
 }
@@ -189,9 +213,7 @@ fn edit_once(
     folder_uuid: Option<&str>,
     history: &[crate::db::HistoryEntry],
 ) -> Result<()> {
-    let config = crate::config::Config::load()?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.edit(
         access_token,
         id,
@@ -216,9 +238,7 @@ pub fn remove(
 }
 
 fn remove_once(access_token: &str, id: &str) -> Result<()> {
-    let config = crate::config::Config::load()?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.remove(access_token, id)?;
     Ok(())
 }
@@ -233,9 +253,7 @@ pub fn list_folders(
 }
 
 fn list_folders_once(access_token: &str) -> Result<Vec<(String, String)>> {
-    let config = crate::config::Config::load()?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.folders(access_token)
 }
 
@@ -250,9 +268,7 @@ pub fn create_folder(
 }
 
 fn create_folder_once(access_token: &str, name: &str) -> Result<String> {
-    let config = crate::config::Config::load()?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.create_folder(access_token, name)
 }
 
@@ -302,15 +318,32 @@ where
 }
 
 fn exchange_refresh_token(refresh_token: &str) -> Result<String> {
-    let config = crate::config::Config::load()?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.exchange_refresh_token(refresh_token)
 }
 
 async fn exchange_refresh_token_async(refresh_token: &str) -> Result<String> {
-    let config = crate::config::Config::load_async().await?;
-    let client =
-        crate::api::Client::new(&config.base_url(), &config.identity_url());
+    let (client, _) = api_client()?;
     client.exchange_refresh_token_async(refresh_token).await
+}
+
+fn api_client() -> Result<(crate::api::Client, crate::config::Config)> {
+    let config = crate::config::Config::load()?;
+    let client = crate::api::Client::new(
+        &config.base_url(),
+        &config.identity_url(),
+        config.client_cert_path(),
+    );
+    Ok((client, config))
+}
+
+async fn api_client_async(
+) -> Result<(crate::api::Client, crate::config::Config)> {
+    let config = crate::config::Config::load_async().await?;
+    let client = crate::api::Client::new(
+        &config.base_url(),
+        &config.identity_url(),
+        config.client_cert_path(),
+    );
+    Ok((client, config))
 }

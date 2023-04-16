@@ -10,8 +10,11 @@ pub struct Config {
     pub identity_url: Option<String>,
     #[serde(default = "default_lock_timeout")]
     pub lock_timeout: u64,
+    #[serde(default = "default_sync_interval")]
+    pub sync_interval: u64,
     #[serde(default = "default_pinentry")]
     pub pinentry: String,
+    pub client_cert_path: Option<std::path::PathBuf>,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -24,7 +27,9 @@ impl Default for Config {
             base_url: None,
             identity_url: None,
             lock_timeout: default_lock_timeout(),
+            sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
+            client_cert_path: None,
             device_id: None,
         }
     }
@@ -32,6 +37,11 @@ impl Default for Config {
 
 #[must_use]
 pub fn default_lock_timeout() -> u64 {
+    3600
+}
+
+#[must_use]
+pub fn default_sync_interval() -> u64 {
     3600
 }
 
@@ -149,6 +159,11 @@ impl Config {
     }
 
     #[must_use]
+    pub fn client_cert_path(&self) -> Option<&std::path::Path> {
+        self.client_cert_path.as_deref()
+    }
+
+    #[must_use]
     pub fn server_name(&self) -> String {
         self.base_url
             .clone()
@@ -169,7 +184,7 @@ pub async fn device_id(config: &Config) -> Result<String> {
         Ok(s.trim().to_string())
     } else {
         let id = config.device_id.as_ref().map_or_else(
-            || uuid::Uuid::new_v4().to_hyphenated().to_string(),
+            || uuid::Uuid::new_v4().hyphenated().to_string(),
             String::to_string,
         );
         let mut fh = tokio::fs::File::create(&file).await.map_err(|e| {

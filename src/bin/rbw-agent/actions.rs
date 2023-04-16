@@ -10,9 +10,8 @@ pub async fn register(
         let url_str = config_base_url().await?;
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
-        let host = if let Some(host) = url.host_str() {
-            host
-        } else {
+        let Some(host) = url.host_str()
+        else {
             return Err(anyhow::anyhow!(
                 "couldn't find host in rbw base url {}",
                 url_str
@@ -33,7 +32,7 @@ pub async fn register(
             let client_id = rbw::pinentry::getpin(
                 &config_pinentry().await?,
                 "API key client__id",
-                &format!("Log in to {}", host),
+                &format!("Log in to {host}"),
                 err.as_deref(),
                 tty,
                 false,
@@ -43,7 +42,7 @@ pub async fn register(
             let client_secret = rbw::pinentry::getpin(
                 &config_pinentry().await?,
                 "API key client__secret",
-                &format!("Log in to {}", host),
+                &format!("Log in to {host}"),
                 err.as_deref(),
                 tty,
                 false,
@@ -89,9 +88,8 @@ pub async fn login(
         let url_str = config_base_url().await?;
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
-        let host = if let Some(host) = url.host_str() {
-            host
-        } else {
+        let Some(host) = url.host_str()
+        else {
             return Err(anyhow::anyhow!(
                 "couldn't find host in rbw base url {}",
                 url_str
@@ -101,7 +99,7 @@ pub async fn login(
         let email = config_email().await?;
 
         let mut err_msg = None;
-        for i in 1_u8..=3 {
+        'attempts: for i in 1_u8..=3 {
             let err = if i > 1 {
                 // this unwrap is safe because we only ever continue the loop
                 // if we have set err_msg
@@ -112,7 +110,7 @@ pub async fn login(
             let password = rbw::pinentry::getpin(
                 &config_pinentry().await?,
                 "Master Password",
-                &format!("Log in to {}", host),
+                &format!("Log in to {host}"),
                 err.as_deref(),
                 tty,
                 true,
@@ -125,52 +123,67 @@ pub async fn login(
                 Ok((
                     access_token,
                     refresh_token,
+                    kdf,
                     iterations,
+                    memory,
+                    parallelism,
                     protected_key,
                 )) => {
                     login_success(
-                        sock,
                         state,
                         access_token,
                         refresh_token,
+                        kdf,
                         iterations,
+                        memory,
+                        parallelism,
                         protected_key,
                         password,
                         db,
                         email,
                     )
                     .await?;
-                    break;
+                    break 'attempts;
                 }
                 Err(rbw::error::Error::TwoFactorRequired { providers }) => {
-                    if providers.contains(
-                        &rbw::api::TwoFactorProviderType::Authenticator,
-                    ) {
-                        let (
-                            access_token,
-                            refresh_token,
-                            iterations,
-                            protected_key,
-                        ) = two_factor(
-                            tty,
-                            &email,
-                            password.clone(),
-                            rbw::api::TwoFactorProviderType::Authenticator,
-                        )
-                        .await?;
-                        login_success(
-                            sock,
-                            state,
-                            access_token,
-                            refresh_token,
-                            iterations,
-                            protected_key,
-                            password,
-                            db,
-                            email,
-                        )
-                        .await?;
-                        break;
+                    let supported_types = vec![
+                        rbw::api::TwoFactorProviderType::Authenticator,
+                        rbw::api::TwoFactorProviderType::Email,
+                    ];
+
+                    for provider in supported_types {
+                        if providers.contains(&provider) {
+                            let (
+                                access_token,
+                                refresh_token,
+                                kdf,
+                                iterations,
+                                memory,
+                                parallelism,
+                                protected_key,
+                            ) = two_factor(
+                                tty,
+                                &email,
+                                password.clone(),
+                                provider,
+                            )
+                            .await?;
+                            login_success(
+                                state,
+                                access_token,
+                                refresh_token,
+                                kdf,
+                                iterations,
+                                memory,
+                                parallelism,
+                                protected_key,
+                                password,
+                                db,
+                                email,
+                            )
+                            .await?;
+                            break 'attempts;
+                        }
                     }
                     return Err(anyhow::anyhow!("TODO"));
                 }
@@ -202,7 +215,15 @@ async fn two_factor(
     email: &str,
     password: rbw::locked::Password,
     provider: rbw::api::TwoFactorProviderType,
-) -> anyhow::Result<(String, String, u32, String)> {
+) -> anyhow::Result<(
+    String,
+    String,
+    rbw::api::KdfType,
+    u32,
+    Option<u32>,
+    Option<u32>,
+    String,
+)> {
     let mut err_msg = None;
     for i in 1_u8..=3 {
         let err = if i > 1 {
@@ -214,11 +235,11 @@ async fn two_factor(
         };
         let code = rbw::pinentry::getpin(
             &config_pinentry().await?,
-            "Authenticator App",
-            "Enter the 6 digit verification code from your authenticator app.",
+            provider.header(),
+            provider.message(),
             err.as_deref(),
             tty,
-            true,
+            provider.grab(),
         )
         .await
         .context("failed to read code from pinentry")?;
@@ -232,11 +253,22 @@ async fn two_factor(
         )
         .await
         {
-            Ok((access_token, refresh_token, iterations, protected_key)) => {
+            Ok((
+                access_token,
+                refresh_token,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                protected_key,
+            )) => {
                 return Ok((
                     access_token,
                     refresh_token,
+                    kdf,
                     iterations,
+                    memory,
+                    parallelism,
                     protected_key,
                 ))
             }
@@ -273,11 +305,13 @@ async fn two_factor(
 }
 
 async fn login_success(
-    sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::RwLock<crate::agent::State>>,
     access_token: String,
     refresh_token: String,
+    kdf: rbw::api::KdfType,
     iterations: u32,
+    memory: Option<u32>,
+    parallelism: Option<u32>,
     protected_key: String,
     password: rbw::locked::Password,
     mut db: rbw::db::Db,
@@ -285,26 +319,30 @@ async fn login_success(
 ) -> anyhow::Result<()> {
     db.access_token = Some(access_token.to_string());
     db.refresh_token = Some(refresh_token.to_string());
+    db.kdf = Some(kdf);
     db.iterations = Some(iterations);
+    db.memory = memory;
+    db.parallelism = parallelism;
     db.protected_key = Some(protected_key.to_string());
     save_db(&db).await?;
 
-    sync(sock, false).await?;
+    sync(None).await?;
     let db = load_db().await?;
 
-    let protected_private_key =
-        if let Some(protected_private_key) = db.protected_private_key {
-            protected_private_key
-        } else {
-            return Err(anyhow::anyhow!(
-                "failed to find protected private key in db"
-            ));
-        };
+    let Some(protected_private_key) = db.protected_private_key
+    else {
+        return Err(anyhow::anyhow!(
+            "failed to find protected private key in db"
+        ));
+    };
 
     let res = rbw::actions::unlock(
         &email,
         &password,
+        kdf,
         iterations,
+        memory,
+        parallelism,
         &protected_key,
         &protected_private_key,
         &db.protected_org_keys,
@@ -330,28 +368,35 @@ pub async fn unlock(
     if state.read().await.needs_unlock() {
         let db = load_db().await?;
 
-        let iterations = if let Some(iterations) = db.iterations {
-            iterations
-        } else {
+        let Some(kdf) = db.kdf
+        else {
+            return Err(anyhow::anyhow!(
+                "failed to find kdf type in db"
+            ));
+        };
+
+        let Some(iterations) = db.iterations
+        else {
             return Err(anyhow::anyhow!(
                 "failed to find number of iterations in db"
             ));
         };
-        let protected_key = if let Some(protected_key) = db.protected_key {
-            protected_key
-        } else {
+
+        let memory = db.memory;
+        let parallelism = db.parallelism;
+
+        let Some(protected_key) = db.protected_key
+        else {
             return Err(anyhow::anyhow!(
                 "failed to find protected key in db"
             ));
         };
-        let protected_private_key =
-            if let Some(protected_private_key) = db.protected_private_key {
-                protected_private_key
-            } else {
-                return Err(anyhow::anyhow!(
-                    "failed to find protected private key in db"
-                ));
-            };
+        let Some(protected_private_key) = db.protected_private_key
+        else {
+            return Err(anyhow::anyhow!(
+                "failed to find protected private key in db"
+            ));
+        };
 
         let email = config_email().await?;
 
@@ -367,7 +412,10 @@ pub async fn unlock(
             let password = rbw::pinentry::getpin(
                 &config_pinentry().await?,
                 "Master Password",
-                &format!("Unlock the local database for '{}'", rbw::dirs::profile()),
+                &format!(
+                    "Unlock the local database for '{}'",
+                    rbw::dirs::profile()
+                ),
                 err.as_deref(),
                 tty,
                 true,
@@ -377,7 +425,10 @@ pub async fn unlock(
             match rbw::actions::unlock(
                 &email,
                 &password,
+                kdf,
                 iterations,
+                memory,
+                parallelism,
                 &protected_key,
                 &protected_private_key,
                 &db.protected_org_keys,
@@ -443,8 +494,7 @@ pub async fn check_lock(
 }
 
 pub async fn sync(
-    sock: &mut crate::sock::Sock,
-    ack: bool,
+    sock: Option<&mut crate::sock::Sock>,
 ) -> anyhow::Result<()> {
     let mut db = load_db().await?;
 
@@ -473,7 +523,7 @@ pub async fn sync(
     db.entries = entries;
     save_db(&db).await?;
 
-    if ack {
+    if let Some(sock) = sock {
         respond_ack(sock).await?;
     }
 
@@ -487,9 +537,8 @@ pub async fn decrypt(
     org_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let state = state.read().await;
-    let keys = if let Some(keys) = state.key(org_id) {
-        keys
-    } else {
+    let Some(keys) = state.key(org_id)
+    else {
         return Err(anyhow::anyhow!(
             "failed to find decryption keys in in-memory state"
         ));
@@ -515,9 +564,8 @@ pub async fn encrypt(
     org_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let state = state.read().await;
-    let keys = if let Some(keys) = state.key(org_id) {
-        keys
-    } else {
+    let Some(keys) = state.key(org_id)
+    else {
         return Err(anyhow::anyhow!(
             "failed to find encryption keys in in-memory state"
         ));

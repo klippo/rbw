@@ -59,6 +59,9 @@ configuration options:
 * `lock_timeout`: The number of seconds to keep the master keys in memory for
   before requiring the password to be entered again. Defaults to `3600` (one
   hour).
+* `sync_interval`: `rbw` will automatically sync the database from the server
+  at an interval of this many seconds, while the agent is running. Setting
+  this value to `0` disables this behavior. Defaults to `3600` (one hour).
 * `pinentry`: The
   [pinentry](https://www.gnupg.org/related_software/pinentry/index.html)
   executable to use. Defaults to `pinentry`.
@@ -83,7 +86,8 @@ functionality.
 
 Run `rbw get <name>` to get your passwords. If you also want to get the username
 or the note associated, you can use the flag `--full`. You can also use the flag
-`--field={field}` to get whatever default or custom field you want.
+`--field={field}` to get whatever default or custom field you want. The `--raw`
+flag will show the output as JSON.
 
 *Note to users of the official Bitwarden server (at bitwarden.com)*: The
 official server has a tendency to detect command line traffic as bot traffic
@@ -96,3 +100,4 @@ the instructions [here](https://bitwarden.com/help/article/personal-api-key/).
 ## Related projects
 
 * [rofi-rbw](https://github.com/fdw/rofi-rbw): A rofi frontend for Bitwarden
+* [bw-ssh](https://framagit.org/Glandos/bw-ssh/): Manage SSH key passphrases in Bitwarden

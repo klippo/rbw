@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.7.1] - 2023-03-27
+
+### Fixed
+
+* argon2 actually works now (#113, Bernd Schoolmann)
+
+## [1.7.0] - 2023-03-25
+
+### Added
+
+* `rbw` now automatically syncs the database from the server at a specified
+  interval while it is running. This defaults to once an hour, but is
+  configurable via the `sync_interval` option
+* Email 2FA is now supported (#111, René 'Necoro' Neumann)
+* argon2 KDF is now supported (#109, Bernd Schoolmann)
+
+### Fixed
+
+* `rbw --version` now works again
+
+## [1.6.0] - 2023-03-09
+
+### Added
+
+* `rbw get` now supports a `--raw` option to display the entire contents of
+  the entry in JSON format (#97, classabbyamp)
+
+## [1.5.0] - 2023-02-18
+
+### Added
+
+* Support for authenticating to self-hosted Bitwarden servers using client
+  certificates (#92, Filipe Pina)
+* Support multiple independent profiles via the `RBW_PROFILE` environment
+  variable (#93, Skia)
+* Add `rbw get --field` (#95, Jericho Keyne)
+
+### Fixed
+
+* Don't panic when not all stdout is read (#82, witcher)
+* Fixed duplicated alias names in help output (#46)
+
 ## [1.4.3] - 2022-02-10
 
 ### Fixed

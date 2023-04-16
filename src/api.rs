@@ -8,6 +8,8 @@ use crate::json::{
     DeserializeJsonWithPath as _, DeserializeJsonWithPathAsync as _,
 };
 
+use tokio::io::AsyncReadExt as _;
+
 #[derive(
     serde_repr::Serialize_repr,
     serde_repr::Deserialize_repr,
@@ -39,7 +41,7 @@ impl std::fmt::Display for UriMatchType {
             RegularExpression => "regular_expression",
             Never => "never",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -53,6 +55,31 @@ pub enum TwoFactorProviderType {
     Remember = 5,
     OrganizationDuo = 6,
     WebAuthn = 7,
+}
+
+impl TwoFactorProviderType {
+    #[must_use]
+    pub fn message(&self) -> &str {
+        match *self {
+            Self::Authenticator => "Enter the 6 digit verification code from your authenticator app.",
+            Self::Email => "Enter the PIN you received via email.",
+            _ => "Enter the code."
+        }
+    }
+
+    #[must_use]
+    pub fn header(&self) -> &str {
+        match *self {
+            Self::Authenticator => "Authenticator App",
+            Self::Email => "Email Code",
+            _ => "Two Factor Authentication",
+        }
+    }
+
+    #[must_use]
+    pub fn grab(&self) -> bool {
+        !matches!(self, Self::Email)
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for TwoFactorProviderType {
@@ -111,7 +138,7 @@ impl std::convert::TryFrom<u64> for TwoFactorProviderType {
             6 => Ok(Self::OrganizationDuo),
             7 => Ok(Self::WebAuthn),
             _ => Err(Error::InvalidTwoFactorProvider {
-                ty: format!("{}", ty),
+                ty: format!("{ty}"),
             }),
         }
     }
@@ -135,6 +162,96 @@ impl std::str::FromStr for TwoFactorProviderType {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum KdfType {
+    Pbkdf2 = 0,
+    Argon2id = 1,
+}
+
+impl<'de> serde::Deserialize<'de> for KdfType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct KdfTypeVisitor;
+        impl<'de> serde::de::Visitor<'de> for KdfTypeVisitor {
+            type Value = KdfType;
+
+            fn expecting(
+                &self,
+                formatter: &mut std::fmt::Formatter,
+            ) -> std::fmt::Result {
+                formatter.write_str("kdf id")
+            }
+
+            fn visit_str<E>(
+                self,
+                value: &str,
+            ) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                value.parse().map_err(serde::de::Error::custom)
+            }
+
+            fn visit_u64<E>(
+                self,
+                value: u64,
+            ) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                std::convert::TryFrom::try_from(value)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_any(KdfTypeVisitor)
+    }
+}
+
+impl std::convert::TryFrom<u64> for KdfType {
+    type Error = Error;
+
+    fn try_from(ty: u64) -> Result<Self> {
+        match ty {
+            0 => Ok(Self::Pbkdf2),
+            1 => Ok(Self::Argon2id),
+            _ => Err(Error::InvalidKdfType {
+                ty: format!("{ty}"),
+            }),
+        }
+    }
+}
+
+impl std::str::FromStr for KdfType {
+    type Err = Error;
+
+    fn from_str(ty: &str) -> Result<Self> {
+        match ty {
+            "0" => Ok(Self::Pbkdf2),
+            "1" => Ok(Self::Argon2id),
+            _ => Err(Error::InvalidKdfType { ty: ty.to_string() }),
+        }
+    }
+}
+
+impl serde::Serialize for KdfType {
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let s = match self {
+            Self::Pbkdf2 => "0",
+            Self::Argon2id => "1",
+        };
+        serializer.serialize_str(s)
+    }
+}
+
 #[derive(serde::Serialize, Debug)]
 struct PreloginReq {
     email: String,
@@ -142,8 +259,14 @@ struct PreloginReq {
 
 #[derive(serde::Deserialize, Debug)]
 struct PreloginRes {
+    #[serde(rename = "Kdf", alias = "kdf")]
+    kdf: KdfType,
     #[serde(rename = "KdfIterations", alias = "kdfIterations")]
     kdf_iterations: u32,
+    #[serde(rename = "KdfMemory", alias = "kdfMemory")]
+    kdf_memory: Option<u32>,
+    #[serde(rename = "KdfParallelism", alias = "kdfParallelism")]
+    kdf_parallelism: Option<u32>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -551,22 +674,64 @@ struct FoldersPostReq {
 pub struct Client {
     base_url: String,
     identity_url: String,
+    client_cert_path: Option<std::path::PathBuf>,
 }
 
 impl Client {
     #[must_use]
-    pub fn new(base_url: &str, identity_url: &str) -> Self {
+    pub fn new(
+        base_url: &str,
+        identity_url: &str,
+        client_cert_path: Option<&std::path::Path>,
+    ) -> Self {
         Self {
             base_url: base_url.to_string(),
             identity_url: identity_url.to_string(),
+            client_cert_path: client_cert_path
+                .map(std::path::Path::to_path_buf),
         }
     }
 
-    pub async fn prelogin(&self, email: &str) -> Result<u32> {
+    async fn reqwest_client(&self) -> Result<reqwest::Client> {
+        if let Some(client_cert_path) = self.client_cert_path.as_ref() {
+            let mut buf = Vec::new();
+            let mut f = tokio::fs::File::open(client_cert_path)
+                .await
+                .map_err(|e| Error::LoadClientCert {
+                    source: e,
+                    file: client_cert_path.clone(),
+                })?;
+            f.read_to_end(&mut buf).await.map_err(|e| {
+                Error::LoadClientCert {
+                    source: e,
+                    file: client_cert_path.clone(),
+                }
+            })?;
+            let pem = reqwest::Identity::from_pem(&buf).map_err(|e| {
+                Error::LoadClientCertReqwest {
+                    source: e,
+                    file: client_cert_path.clone(),
+                }
+            })?;
+            Ok(reqwest::Client::builder().identity(pem).build().map_err(
+                |e| Error::LoadClientCertReqwest {
+                    source: e,
+                    file: client_cert_path.clone(),
+                },
+            )?)
+        } else {
+            Ok(reqwest::Client::new())
+        }
+    }
+
+    pub async fn prelogin(
+        &self,
+        email: &str,
+    ) -> Result<(KdfType, u32, Option<u32>, Option<u32>)> {
         let prelogin = PreloginReq {
             email: email.to_string(),
         };
-        let client = reqwest::Client::new();
+        let client = self.reqwest_client().await?;
         let res = client
             .post(&self.api_url("/accounts/prelogin"))
             .json(&prelogin)
@@ -574,7 +739,12 @@ impl Client {
             .await
             .map_err(|source| Error::Reqwest { source })?;
         let prelogin_res: PreloginRes = res.json_with_path().await?;
-        Ok(prelogin_res.kdf_iterations)
+        Ok((
+            prelogin_res.kdf,
+            prelogin_res.kdf_iterations,
+            prelogin_res.kdf_memory,
+            prelogin_res.kdf_parallelism,
+        ))
     }
 
     pub async fn register(
@@ -597,11 +767,11 @@ impl Client {
             device_type: 8,
             device_identifier: device_id.to_string(),
             device_name: "rbw".to_string(),
-            device_push_token: "".to_string(),
+            device_push_token: String::new(),
             two_factor_token: None,
             two_factor_provider: None,
         };
-        let client = reqwest::Client::new();
+        let client = self.reqwest_client().await?;
         let res = client
             .post(&self.identity_url("/connect/token"))
             .form(&connect_req)
@@ -627,28 +797,25 @@ impl Client {
         let connect_req = ConnectPasswordReq {
             grant_type: "password".to_string(),
             username: email.to_string(),
-            password: Some(base64::encode(password_hash.hash())),
+            password: Some(crate::base64::encode(password_hash.hash())),
             scope: "api offline_access".to_string(),
             client_id: "desktop".to_string(),
             client_secret: None,
             device_type: 8,
             device_identifier: device_id.to_string(),
             device_name: "rbw".to_string(),
-            device_push_token: "".to_string(),
+            device_push_token: String::new(),
             two_factor_token: two_factor_token
                 .map(std::string::ToString::to_string),
-            // enum casts are safe, and i don't think there's a better way to
-            // write it without some explicit impls
-            #[allow(clippy::as_conversions)]
             two_factor_provider: two_factor_provider.map(|ty| ty as u32),
         };
-        let client = reqwest::Client::new();
+        let client = self.reqwest_client().await?;
         let res = client
             .post(&self.identity_url("/connect/token"))
             .form(&connect_req)
             .header(
                 "auth-email",
-                base64::encode_config(email, base64::URL_SAFE_NO_PAD),
+                crate::base64::encode_url_safe_no_pad(email),
             )
             .send()
             .await
@@ -676,10 +843,10 @@ impl Client {
         std::collections::HashMap<String, String>,
         Vec<crate::db::Entry>,
     )> {
-        let client = reqwest::Client::new();
+        let client = self.reqwest_client().await?;
         let res = client
             .get(&self.api_url("/sync"))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", format!("Bearer {access_token}"))
             .send()
             .await
             .map_err(|source| Error::Reqwest { source })?;
@@ -820,8 +987,8 @@ impl Client {
         }
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(&self.api_url("/ciphers"))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .post(self.api_url("/ciphers"))
+            .header("Authorization", format!("Bearer {access_token}"))
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
@@ -953,8 +1120,8 @@ impl Client {
         }
         let client = reqwest::blocking::Client::new();
         let res = client
-            .put(&self.api_url(&format!("/ciphers/{}", id)))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .put(self.api_url(&format!("/ciphers/{id}")))
+            .header("Authorization", format!("Bearer {access_token}"))
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
@@ -972,8 +1139,8 @@ impl Client {
     pub fn remove(&self, access_token: &str, id: &str) -> Result<()> {
         let client = reqwest::blocking::Client::new();
         let res = client
-            .delete(&self.api_url(&format!("/ciphers/{}", id)))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .delete(self.api_url(&format!("/ciphers/{id}")))
+            .header("Authorization", format!("Bearer {access_token}"))
             .send()
             .map_err(|source| Error::Reqwest { source })?;
         match res.status() {
@@ -993,8 +1160,8 @@ impl Client {
     ) -> Result<Vec<(String, String)>> {
         let client = reqwest::blocking::Client::new();
         let res = client
-            .get(&self.api_url("/folders"))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .get(self.api_url("/folders"))
+            .header("Authorization", format!("Bearer {access_token}"))
             .send()
             .map_err(|source| Error::Reqwest { source })?;
         match res.status() {
@@ -1025,8 +1192,8 @@ impl Client {
         };
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(&self.api_url("/folders"))
-            .header("Authorization", format!("Bearer {}", access_token))
+            .post(self.api_url("/folders"))
+            .header("Authorization", format!("Bearer {access_token}"))
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
@@ -1055,7 +1222,7 @@ impl Client {
         };
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(&self.identity_url("/connect/token"))
+            .post(self.identity_url("/connect/token"))
             .form(&connect_req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
@@ -1072,7 +1239,7 @@ impl Client {
             client_id: "desktop".to_string(),
             refresh_token: refresh_token.to_string(),
         };
-        let client = reqwest::Client::new();
+        let client = self.reqwest_client().await?;
         let res = client
             .post(&self.identity_url("/connect/token"))
             .form(&connect_req)
